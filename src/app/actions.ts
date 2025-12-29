@@ -36,6 +36,10 @@ export async function signupAction(prevState: unknown, data: FormData) {
         return { success: false, error: 'User with this email already exists.' };
     }
 
+    if (!departments.some(d => d.id === departmentId)) {
+        return { success: false, error: 'Invalid department selected.' };
+    }
+
     // In a real app, you would use a secure random code generator
     const code = '123456'; // Mock verification code
     console.log(`Verification code for ${email}: ${code}`);
@@ -172,15 +176,37 @@ export async function updatePasswordAction(prevState: unknown, data: FormData) {
     return { success: true };
 }
 
+/**
+ * Updates the user's daily step count.
+ *
+ * TODO: Step Reset Mechanism Required
+ * ------------------------------------
+ * Currently, this function only handles same-day step updates. The following
+ * features are needed for a complete implementation:
+ *
+ * 1. Daily Reset (midnight):
+ *    - Copy current `daily` to `previousDaily`
+ *    - Reset `daily` to 0
+ *
+ * 2. Weekly Reset (e.g., Sunday midnight):
+ *    - Copy current `weekly` to `previousWeekly`
+ *    - Reset `weekly` to 0
+ *
+ * This requires a scheduled job (cron) or a check-on-access pattern that
+ * compares timestamps to determine if a reset is needed.
+ *
+ * The `previousDaily` and `previousWeekly` fields exist in the data model
+ * but are never updated by this action.
+ */
 export async function updateStepsAction(prevState: unknown, data: FormData) {
     const { currentUser } = await getAuth();
     if (!currentUser) {
       return { success: false, error: 'You must be logged in to do that.' };
     }
-    
+
     const stepsStr = data.get('steps') as string;
     const newDailySteps = parseInt(stepsStr, 10);
-    
+
     if (isNaN(newDailySteps) || newDailySteps < 0) {
         return { success: false, error: 'Please enter a valid number of steps.' };
     }
@@ -189,16 +215,16 @@ export async function updateStepsAction(prevState: unknown, data: FormData) {
     if (userIndex === -1) {
       return { success: false, error: 'User not found.' };
     }
-    
+
     const oldDailySteps = users[userIndex].steps.daily || 0;
-    
+
     // Update total and weekly steps based on the change in daily steps
     users[userIndex].steps.total = (users[userIndex].steps.total - oldDailySteps) + newDailySteps;
     users[userIndex].steps.weekly = (users[userIndex].steps.weekly - oldDailySteps) + newDailySteps;
-    
+
     // Set the new daily step count
     users[userIndex].steps.daily = newDailySteps;
-    
+
     revalidatePath('/dashboard');
     return { success: true, newDailySteps };
 }
@@ -220,11 +246,19 @@ export async function adminCreateUserAction(prevState: unknown, data: FormData) 
     if (!firstName || !lastName || !email || !password || !departmentId) {
         return { success: false, error: 'All fields are required.' };
     }
-    
+
+    if (!email.endsWith('@dhs.lacounty.gov')) {
+        return { success: false, error: 'Only @dhs.lacounty.gov emails are allowed.' };
+    }
+
     if (users.some(user => user.id === email)) {
         return { success: false, error: 'User with this email already exists.' };
     }
-    
+
+    if (!departments.some(d => d.id === departmentId)) {
+        return { success: false, error: 'Invalid department selected.' };
+    }
+
     let newUserRole: 'user' | 'manager' | 'admin' = 'user';
     // Only admins can assign roles. Managers can only create users.
     if (currentUser.role === 'admin' && role) {
@@ -266,8 +300,15 @@ export async function adminCreateDepartmentAction(prevState: unknown, data: Form
         return { success: false, error: 'A department with this name already exists.' };
     }
 
+    const newId = name.toLowerCase().replace(/\s+/g, '-');
+
+    // Check for ID collision (e.g., "HR" and "H R" would both become "hr")
+    if (departments.some(d => d.id === newId)) {
+        return { success: false, error: 'A department with a similar name already exists.' };
+    }
+
     const newDepartment: Department = {
-        id: name.toLowerCase().replace(/\s+/g, '-'),
+        id: newId,
         name,
     };
 
@@ -321,14 +362,30 @@ export async function deleteUserAction(userId: string) {
     if (adminUser.id === userId) {
         return { success: false, error: "Admins cannot delete their own account." };
     }
-    
+
     const userIndex = users.findIndex(u => u.id === userId);
     if (userIndex === -1) {
         return { success: false, error: "User not found." };
     }
 
+    // Remove user from users array
     users.splice(userIndex, 1);
+
+    // Clean up orphaned messages sent by this user
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].senderId === userId) {
+            messages.splice(i, 1);
+        }
+    }
+
+    // Clean up support thread for this user
+    const threadIndex = supportThreads.findIndex(t => t.userId === userId);
+    if (threadIndex !== -1) {
+        supportThreads.splice(threadIndex, 1);
+    }
+
     revalidatePath('/dashboard/admin');
+    revalidatePath('/dashboard'); // Refresh leaderboards and chat
     return { success: true };
 }
 

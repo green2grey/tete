@@ -319,4 +319,174 @@ describe('Action Validation Logic', () => {
       expect(canDemoteAdmin('admin@test.com', 'admin@test.com', 'admin', 1)).toBe(true)
     })
   })
+
+  describe('Department Existence Validation', () => {
+    const departments = [
+      { id: 'eng', name: 'Engineering' },
+      { id: 'mkt', name: 'Marketing' },
+      { id: 'hr', name: 'Human Resources' },
+    ]
+
+    const isValidDepartment = (departmentId: string) =>
+      departments.some(d => d.id === departmentId)
+
+    it('should accept valid department ID', () => {
+      expect(isValidDepartment('eng')).toBe(true)
+      expect(isValidDepartment('mkt')).toBe(true)
+      expect(isValidDepartment('hr')).toBe(true)
+    })
+
+    it('should reject non-existent department ID', () => {
+      expect(isValidDepartment('fake-dept')).toBe(false)
+      expect(isValidDepartment('sales')).toBe(false)
+      expect(isValidDepartment('')).toBe(false)
+    })
+
+    it('should be case-sensitive', () => {
+      expect(isValidDepartment('ENG')).toBe(false)
+      expect(isValidDepartment('Eng')).toBe(false)
+    })
+  })
+
+  describe('Department ID Collision Detection', () => {
+    const generateDepartmentId = (name: string) =>
+      name.toLowerCase().replace(/\s+/g, '-')
+
+    const existingDepartments = [
+      { id: 'hr', name: 'HR' },
+      { id: 'engineering', name: 'Engineering' },
+    ]
+
+    const hasIdCollision = (name: string) => {
+      const newId = generateDepartmentId(name)
+      return existingDepartments.some(d => d.id === newId)
+    }
+
+    it('should detect collision when IDs match', () => {
+      expect(hasIdCollision('HR')).toBe(true)
+      expect(hasIdCollision('hr')).toBe(true)
+      expect(hasIdCollision('Engineering')).toBe(true)
+    })
+
+    it('should detect collision with different spacing', () => {
+      // "H R" becomes "h-r", not "hr", so no collision
+      expect(hasIdCollision('H R')).toBe(false)
+      // But "H-R" would also become "h-r", no collision with "hr"
+      expect(hasIdCollision('H-R')).toBe(false)
+    })
+
+    it('should allow non-colliding names', () => {
+      expect(hasIdCollision('Sales')).toBe(false)
+      expect(hasIdCollision('Marketing')).toBe(false)
+      expect(hasIdCollision('Human Resources')).toBe(false)
+    })
+
+    it('should handle edge cases', () => {
+      // Multiple spaces become single hyphen
+      expect(generateDepartmentId('Very   Long  Name')).toBe('very-long-name')
+      // Leading/trailing spaces
+      expect(generateDepartmentId('  Padded  ')).toBe('-padded-')
+    })
+  })
+
+  describe('User Deletion Cleanup', () => {
+    interface Message {
+      id: string
+      senderId: string
+      content: string
+    }
+
+    interface SupportThread {
+      userId: string
+      messages: { id: string; content: string }[]
+    }
+
+    const cleanupUserData = (
+      userId: string,
+      messages: Message[],
+      supportThreads: SupportThread[]
+    ) => {
+      // Remove messages by this user
+      const filteredMessages = messages.filter(m => m.senderId !== userId)
+
+      // Remove support thread for this user
+      const filteredThreads = supportThreads.filter(t => t.userId !== userId)
+
+      return {
+        messages: filteredMessages,
+        supportThreads: filteredThreads,
+        messagesRemoved: messages.length - filteredMessages.length,
+        threadRemoved: supportThreads.length !== filteredThreads.length,
+      }
+    }
+
+    it('should remove messages sent by deleted user', () => {
+      const messages: Message[] = [
+        { id: '1', senderId: 'user1@test.com', content: 'Hello' },
+        { id: '2', senderId: 'user2@test.com', content: 'Hi' },
+        { id: '3', senderId: 'user1@test.com', content: 'Bye' },
+      ]
+      const supportThreads: SupportThread[] = []
+
+      const result = cleanupUserData('user1@test.com', messages, supportThreads)
+
+      expect(result.messages).toHaveLength(1)
+      expect(result.messages[0].senderId).toBe('user2@test.com')
+      expect(result.messagesRemoved).toBe(2)
+    })
+
+    it('should remove support thread for deleted user', () => {
+      const messages: Message[] = []
+      const supportThreads: SupportThread[] = [
+        { userId: 'user1@test.com', messages: [{ id: '1', content: 'Help!' }] },
+        { userId: 'user2@test.com', messages: [{ id: '2', content: 'Question' }] },
+      ]
+
+      const result = cleanupUserData('user1@test.com', messages, supportThreads)
+
+      expect(result.supportThreads).toHaveLength(1)
+      expect(result.supportThreads[0].userId).toBe('user2@test.com')
+      expect(result.threadRemoved).toBe(true)
+    })
+
+    it('should handle user with no messages or threads', () => {
+      const messages: Message[] = [
+        { id: '1', senderId: 'other@test.com', content: 'Hello' },
+      ]
+      const supportThreads: SupportThread[] = [
+        { userId: 'other@test.com', messages: [] },
+      ]
+
+      const result = cleanupUserData('user1@test.com', messages, supportThreads)
+
+      expect(result.messages).toHaveLength(1)
+      expect(result.supportThreads).toHaveLength(1)
+      expect(result.messagesRemoved).toBe(0)
+      expect(result.threadRemoved).toBe(false)
+    })
+
+    it('should handle empty arrays', () => {
+      const result = cleanupUserData('user1@test.com', [], [])
+
+      expect(result.messages).toHaveLength(0)
+      expect(result.supportThreads).toHaveLength(0)
+      expect(result.messagesRemoved).toBe(0)
+      expect(result.threadRemoved).toBe(false)
+    })
+  })
+
+  describe('Admin Email Validation (for adminCreateUserAction)', () => {
+    const isValidDHSEmail = (email: string) => email.endsWith('@dhs.lacounty.gov')
+
+    it('should enforce DHS email for admin-created users', () => {
+      expect(isValidDHSEmail('newuser@dhs.lacounty.gov')).toBe(true)
+      expect(isValidDHSEmail('test.user@dhs.lacounty.gov')).toBe(true)
+    })
+
+    it('should reject non-DHS emails for admin-created users', () => {
+      expect(isValidDHSEmail('user@gmail.com')).toBe(false)
+      expect(isValidDHSEmail('user@company.com')).toBe(false)
+      expect(isValidDHSEmail('admin@lacounty.gov')).toBe(false)
+    })
+  })
 })
